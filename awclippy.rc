@@ -1,5 +1,8 @@
 // Resource script for AWClippy
 #define MANIFEST 24
 
+// Embed the application icon (ID 1 is the main icon)
+1 ICON "icons\\app_icon.ico"
+
 // Embed the manifest file
 1 MANIFEST "awclippy.manifest"

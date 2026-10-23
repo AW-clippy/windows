@@ -85,8 +85,8 @@ unsafe extern "system" fn keyboard_hook_proc(
                     tokio::spawn(async move {
                         // Small delay to let clipboard update
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                        if let Err(e) = handle_clipboard_change(state).await {
-                            log::debug_error!("Clipboard sync error: {}", e);
+                        if let Err(_e) = handle_clipboard_change(state).await {
+                            log::debug_error!("Clipboard sync error: {}", _e);
                         }
                     });
                 }

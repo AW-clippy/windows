@@ -24,9 +24,9 @@ pub async fn start_listener(state: AppState, port: u16) -> Result<(), Box<dyn st
         let (stream, addr) = listener.accept().await?;
         let state_clone = state.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, addr, state_clone).await {
-                if e.to_string() != "early eof" && !e.to_string().contains("completed successfully") {
-                    log::debug_error!("Connection error from {}: {}", addr, e);
+            if let Err(_e) = handle_connection(stream, addr, state_clone).await {
+                if _e.to_string() != "early eof" && !_e.to_string().contains("completed successfully") {
+                    log::debug_error!("Connection error from {}: {}", addr, _e);
                 }
             }
         });
@@ -35,10 +35,10 @@ pub async fn start_listener(state: AppState, port: u16) -> Result<(), Box<dyn st
 
 async fn handle_connection(
     mut stream: TcpStream,
-    addr: SocketAddr,
+    _addr: SocketAddr,
     state: AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    log::debug_log!("[ANDROID→WINDOWS] Incoming connection from {}", addr);
+    log::debug_log!("[ANDROID→WINDOWS] Incoming connection from {}", _addr);
     
     // Read length prefix (4 bytes) with 5-second timeout
     let mut len_buf = [0u8; 4];
@@ -110,8 +110,8 @@ pub async fn broadcast_clipboard(encrypted_data: &[u8]) -> Result<(), Box<dyn st
             log::debug_log!("[WINDOWS→ANDROID] Target Android address: {}", addr);
             addr
         },
-        Err(e) => {
-            log::debug_log!("[WINDOWS→ANDROID] ❌ FAILED - No Android device found: {}", e);
+        Err(_e) => {
+            log::debug_log!("[WINDOWS→ANDROID] ❌ FAILED - No Android device found: {}", _e);
             return Ok(());
         }
     };
@@ -135,8 +135,8 @@ pub async fn broadcast_clipboard(encrypted_data: &[u8]) -> Result<(), Box<dyn st
                 Ok(Ok(())) => {
                     log::debug_log!("[WINDOWS→ANDROID] ✅ SUCCESS - Sent clipboard to Android");
                 }
-                Ok(Err(e)) => {
-                    log::debug_error!("[WINDOWS→ANDROID] ❌ Write error: {}", e);
+                Ok(Err(_e)) => {
+                    log::debug_error!("[WINDOWS→ANDROID] ❌ Write error: {}", _e);
                 }
                 Err(_) => {
                     log::debug_error!("[WINDOWS→ANDROID] ❌ Send timed out after 5 seconds");

@@ -47,6 +47,19 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "[OK] $rustVersion" -ForegroundColor Green
 Write-Host ""
 
+# Stop any running instances to avoid "Access denied" errors
+Write-Host "[*] Checking for running instances..." -ForegroundColor Yellow
+$runningProcess = Get-Process -Name "awclippy-windows" -ErrorAction SilentlyContinue
+if ($runningProcess) {
+    Write-Host "[*] Stopping running AWClippy instance..." -ForegroundColor Yellow
+    Stop-Process -Name "awclippy-windows" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    Write-Host "[OK] Stopped running instance" -ForegroundColor Green
+} else {
+    Write-Host "[OK] No running instances found" -ForegroundColor Green
+}
+Write-Host ""
+
 # Build release binary
 Write-Host "[*] Building optimized release binary..." -ForegroundColor Yellow
 Write-Host ""

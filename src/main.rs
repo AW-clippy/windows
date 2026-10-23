@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod clipboard;
 mod crypto;
 mod network;
@@ -80,20 +82,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let network_state = state.clone();
     let sync_port = state.sync_port;
     tokio::spawn(async move {
-        if let Err(e) = network::start_listener(network_state, sync_port).await {
-            log::debug_error!("Network listener error: {}", e);
+        if let Err(_e) = network::start_listener(network_state, sync_port).await {
+            log::debug_error!("Network listener error: {}", _e);
         }
     });
 
     // Start mDNS service advertisement
-    if let Err(e) = network::start_mdns_service(sync_port).await {
-        log::debug_error!("mDNS service error: {}", e);
+    if let Err(_e) = network::start_mdns_service(sync_port).await {
+        log::debug_error!("mDNS service error: {}", _e);
     }
     
     // Start mDNS browser to discover Android devices
     let browser_state = state.clone();
-    if let Err(e) = network::start_mdns_browser(browser_state).await {
-        log::debug_error!("mDNS browser error: {}", e);
+    if let Err(_e) = network::start_mdns_browser(browser_state).await {
+        log::debug_error!("mDNS browser error: {}", _e);
     }
 
     // Initialize system tray with comprehensive menu
@@ -102,8 +104,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             log::debug_log!("✅ System tray initialized successfully");
             Some(tray)
         }
-        Err(e) => {
-            log::debug_error!("⚠️  Could not create system tray: {}", e);
+        Err(_e) => {
+            log::debug_error!("⚠️  Could not create system tray: {}", _e);
             log::debug_error!("    App will continue running without tray icon");
             None
         }
@@ -115,8 +117,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create settings window
     let settings_window = match ui::SettingsWindow::new() {
         Ok(win) => Some(win),
-        Err(e) => {
-            log::debug_error!("⚠️  Could not create settings window: {}", e);
+        Err(_e) => {
+            log::debug_error!("⚠️  Could not create settings window: {}", _e);
             None
         }
     };

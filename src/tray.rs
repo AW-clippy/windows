@@ -99,15 +99,15 @@ impl TrayMenu {
                             log::debug_log!("⏸️  Clipboard sync paused");
                         }
                     } else if event.id == download_id {
-                        let _ = open::that("https://github.com/YOUR_USERNAME/AWClippy/releases");
+                        let _ = open::that("https://github.com/AW-clippy/windows/releases");
                     } else if event.id == setup_id {
                         show_setup_instructions();
                     } else if event.id == about_id {
                         show_about_dialog();
                     } else if event.id == help_id {
-                        let _ = open::that("https://github.com/YOUR_USERNAME/AWClippy#readme");
+                        let _ = open::that("https://github.com/AW-clippy/windows#readme");
                     } else if event.id == issue_id {
-                        let _ = open::that("https://github.com/YOUR_USERNAME/AWClippy/issues");
+                        let _ = open::that("https://github.com/AW-clippy/windows/issues");
                     } else if event.id == quit_id {
                         log::debug_log!("Exiting AW Clippy...");
                         std::process::exit(0);
@@ -380,7 +380,7 @@ fn show_setup_instructions() {
    • Check Windows Firewall isn't blocking AW Clippy
    • Verify ports 48899 and 48900 are available
 
-For detailed help, visit: github.com/YOUR_USERNAME/AWClippy
+For detailed help, visit: github.com/AW-clippy/windows
 "#;
 
     #[cfg(target_os = "windows")]
@@ -421,7 +421,7 @@ fn show_about_dialog() {
    • Open source
 
 👨‍💻 Developed with ❤️
-   github.com/YOUR_USERNAME/AWClippy
+   github.com/AW-clippy/windows
 
 📄 License: MIT
 "#;
