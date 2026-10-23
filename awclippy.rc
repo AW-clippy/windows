@@ -1,0 +1,5 @@
+// Resource script for AWClippy
+#define MANIFEST 24
+
+// Embed the manifest file
+1 MANIFEST "awclippy.manifest"

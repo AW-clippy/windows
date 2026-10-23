@@ -1,0 +1,32 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock file (for binary projects, you might want to commit this)
+# Uncomment if you want to ignore it
+# Cargo.lock
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+!.env.example
+
+# Windows installer artifacts
+installer/*.wixobj
+installer/*.wixpdb
+installer/*.msi
+
+# Log files
+*.log
+
+# Windows specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
