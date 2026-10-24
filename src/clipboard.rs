@@ -7,27 +7,26 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::DataExchange::{
     GetClipboardData, OpenClipboard, 
     CloseClipboard, IsClipboardFormatAvailable, SetClipboardData, EmptyClipboard,
+    AddClipboardFormatListener,
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassW, SetWindowsHookExW, CallNextHookEx,
+    CreateWindowExW, DefWindowProcW, RegisterClassW,
     WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
-    HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_C};
 use windows::core::w;
 
 const CF_UNICODETEXT: u32 = 13;
+const WM_CLIPBOARDUPDATE: u32 = 0x031D;
 
 static mut APP_STATE: Option<Arc<Mutex<AppState>>> = None;
-static mut KEYBOARD_HOOK: Option<HHOOK> = None;
+static mut CLIPBOARD_HWND: Option<HWND> = None;
 
-pub async fn monitor_clipboard(state: AppState) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn monitor_clipboard(state: AppState) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     unsafe {
         APP_STATE = Some(Arc::new(Mutex::new(state)));
 
         let h_instance = GetModuleHandleW(None)?;
-        
         let class_name = w!("AWClippyMonitorClass");
         
         let wnd_class = WNDCLASSW {
@@ -39,7 +38,7 @@ pub async fn monitor_clipboard(state: AppState) -> Result<(), Box<dyn std::error
 
         RegisterClassW(&wnd_class);
 
-        let _hwnd = CreateWindowExW(
+        let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             class_name,
             w!("AWClippy Monitor"),
@@ -51,50 +50,18 @@ pub async fn monitor_clipboard(state: AppState) -> Result<(), Box<dyn std::error
             None,
         )?;
 
-        // Install keyboard hook to detect Ctrl+C
-        KEYBOARD_HOOK = Some(SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), h_instance, 0)?);
+        // Register native Windows clipboard listener (No keyboard hooks, ZERO input lag!)
+        AddClipboardFormatListener(hwnd)?;
+        CLIPBOARD_HWND = Some(hwnd);
 
-        log::debug_log!("Clipboard monitoring active (Ctrl+C detection only)");
-        
-        // No need for a separate message loop thread - the main loop handles messages
+        log::debug_log!("Native clipboard format listener active (AddClipboardFormatListener)");
     }
 
     Ok(())
 }
 
-unsafe extern "system" fn keyboard_hook_proc(
-    n_code: i32,
-    w_param: WPARAM,
-    l_param: LPARAM,
-) -> LRESULT {
-    if n_code >= 0 && (w_param.0 as u32 == WM_KEYDOWN || w_param.0 as u32 == WM_SYSKEYDOWN) {
-        let kb_struct = *(l_param.0 as *const KBDLLHOOKSTRUCT);
-        
-        // Check if 'C' key was pressed
-        if kb_struct.vkCode == VK_C.0 as u32 {
-            // Check if Ctrl is currently pressed
-            let ctrl_state = GetKeyState(VK_CONTROL.0 as i32);
-            if (ctrl_state & 0x8000u16 as i16) != 0 {
-                // Ctrl+C detected! Wait a moment for clipboard to update, then sync
-                log::debug_log!("Ctrl+C detected! Syncing clipboard...");
-                
-                // Access APP_STATE via raw pointer
-                let state_ptr = std::ptr::addr_of!(APP_STATE);
-                if let Some(state_arc) = (*state_ptr).as_ref() {
-                    let state = state_arc.clone();
-                    tokio::spawn(async move {
-                        // Small delay to let clipboard update
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                        if let Err(_e) = handle_clipboard_change(state).await {
-                            log::debug_error!("Clipboard sync error: {}", _e);
-                        }
-                    });
-                }
-            }
-        }
-    }
-    
-    CallNextHookEx(None, n_code, w_param, l_param)
+pub fn get_hwnd() -> Option<HWND> {
+    unsafe { CLIPBOARD_HWND }
 }
 
 unsafe extern "system" fn window_proc(
@@ -103,10 +70,29 @@ unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if msg == WM_CLIPBOARDUPDATE {
+        let state_ptr = std::ptr::addr_of!(APP_STATE);
+        if let Some(state_arc) = (*state_ptr).as_ref() {
+            let state = state_arc.clone();
+            tokio::spawn(async move {
+                // Short delay to ensure source application has finalized clipboard data
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                if let Err(_e) = handle_clipboard_change(state).await {
+                    log::debug_error!("Clipboard sync error: {}", _e);
+                }
+            });
+        }
+        return LRESULT(0);
+    }
+    // Handle Windows shutdown/close/kill requests cleanly
+    if msg == 0x0010 /* WM_CLOSE */ || msg == 0x0002 /* WM_DESTROY */ || msg == 0x0012 /* WM_QUIT */ || msg == 0x0011 /* WM_QUERYENDSESSION */ || msg == 0x0016 /* WM_ENDSESSION */ {
+        log::debug_log!("Shutdown message received, exiting cleanly...");
+        std::process::exit(0);
+    }
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
-async fn handle_clipboard_change(state_arc: Arc<Mutex<AppState>>) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_clipboard_change(state_arc: Arc<Mutex<AppState>>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let text = get_clipboard_text()?;
     
     if text.is_empty() {
@@ -135,16 +121,15 @@ async fn handle_clipboard_change(state_arc: Arc<Mutex<AppState>>) -> Result<(), 
     *last_hash = Some(text_hash);
     drop(last_hash);
     
-    // Encrypt and broadcast
-    let encrypted = state.crypto.encrypt(&text)?;
-    network::broadcast_clipboard(&encrypted).await?;
+    // Broadcast clipboard via protocol
+    network::broadcast_clipboard(&state, &text).await?;
     
     log::debug_log!("Clipboard synced: {} bytes", text.len());
     
     Ok(())
 }
 
-fn get_clipboard_text() -> Result<String, Box<dyn std::error::Error>> {
+fn get_clipboard_text() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     unsafe {
         OpenClipboard(None)?;
 
@@ -155,7 +140,6 @@ fn get_clipboard_text() -> Result<String, Box<dyn std::error::Error>> {
                         if h_data.is_invalid() {
                             Ok(String::new())
                         } else {
-                            // Cast HANDLE to HGLOBAL
                             let h_global = HGLOBAL(h_data.0);
                             let ptr = GlobalLock(h_global) as *const u16;
                             if !ptr.is_null() {
@@ -181,8 +165,6 @@ fn get_clipboard_text() -> Result<String, Box<dyn std::error::Error>> {
 }
 
 pub fn set_clipboard_text(text: &str) -> Result<(), String> {
-    // Retry mechanism for clipboard operations
-    // Windows clipboard can be temporarily unavailable if another app is using it
     let max_attempts = 5;
     let mut last_error = None;
     
@@ -203,7 +185,6 @@ pub fn set_clipboard_text(text: &str) -> Result<(), String> {
 
 fn try_set_clipboard(text: &str) -> Result<(), String> {
     unsafe {
-        // Try to open clipboard
         OpenClipboard(None).map_err(|e| format!("Failed to open clipboard: {}", e))?;
         
         EmptyClipboard().map_err(|e| {
@@ -227,12 +208,8 @@ fn try_set_clipboard(text: &str) -> Result<(), String> {
         }
         
         ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
-        
-        // GlobalUnlock returns 0 on success when refcount reaches 0, which is normal
-        // We don't check the result because 0 is actually success here
         let _ = GlobalUnlock(h_mem);
         
-        // Cast HGLOBAL to HANDLE for SetClipboardData
         SetClipboardData(CF_UNICODETEXT, HANDLE(h_mem.0)).map_err(|e| {
             let _ = CloseClipboard();
             format!("Failed to set clipboard data: {}", e)

@@ -49,11 +49,11 @@ Write-Host ""
 
 # Stop any running instances to avoid "Access denied" errors
 Write-Host "[*] Checking for running instances..." -ForegroundColor Yellow
-$runningProcess = Get-Process -Name "awclippy-windows" -ErrorAction SilentlyContinue
-if ($runningProcess) {
-    Write-Host "[*] Stopping running AWClippy instance..." -ForegroundColor Yellow
-    Stop-Process -Name "awclippy-windows" -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
+$proc = Get-Process -Name "awclippy-windows" -ErrorAction SilentlyContinue
+if ($proc) {
+    Write-Host "[*] Terminating running AWClippy instance..." -ForegroundColor Yellow
+    taskkill.exe /F /IM "awclippy-windows.exe" /T 2>$null | Out-Null
+    Start-Sleep -Milliseconds 500
     Write-Host "[OK] Stopped running instance" -ForegroundColor Green
 } else {
     Write-Host "[OK] No running instances found" -ForegroundColor Green

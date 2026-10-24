@@ -9,6 +9,7 @@ use crate::log;
 pub struct TrayMenu {
     tray: TrayIcon,
     pub settings_requested: Arc<AtomicBool>,
+    pub resync_requested: Arc<AtomicBool>,
     _paused: Arc<AtomicBool>,
     status_item: MenuItem,
 }
@@ -22,10 +23,15 @@ impl TrayMenu {
         let menu = Menu::new();
         
         // Status label (will be updated dynamically)
-        let status_item = MenuItem::new("AW Clippy - Searching for Android...", false, None);
+        let status_item = MenuItem::new("AW Clippy - Initializing network...", false, None);
         menu.append(&status_item)?;
         menu.append(&PredefinedMenuItem::separator())?;
         
+        // Re-sync menu item
+        let resync_item = MenuItem::new("↻ Re-sync with Phone", true, None);
+        menu.append(&resync_item)?;
+        menu.append(&PredefinedMenuItem::separator())?;
+
         // Settings menu item
         let settings_item = MenuItem::new("Settings", true, None);
         menu.append(&settings_item)?;
@@ -72,10 +78,13 @@ impl TrayMenu {
             .build()?;
 
         let settings_requested = Arc::new(AtomicBool::new(false));
+        let resync_requested = Arc::new(AtomicBool::new(false));
         
         // Handle menu events
         let paused_clone = Arc::clone(&paused);
         let settings_clone = Arc::clone(&settings_requested);
+        let resync_clone = Arc::clone(&resync_requested);
+        let resync_id = resync_item.id().clone();
         let settings_id = settings_item.id().clone();
         let pause_id = pause_item.id().clone();
         let download_id = download_item.id().clone();
@@ -89,7 +98,9 @@ impl TrayMenu {
             let menu_channel = MenuEvent::receiver();
             loop {
                 if let Ok(event) = menu_channel.recv() {
-                    if event.id == settings_id {
+                    if event.id == resync_id {
+                        resync_clone.store(true, Ordering::SeqCst);
+                    } else if event.id == settings_id {
                         settings_clone.store(true, Ordering::SeqCst);
                     } else if event.id == pause_id {
                         let was_paused = paused_clone.fetch_xor(true, Ordering::SeqCst);
@@ -119,29 +130,72 @@ impl TrayMenu {
         Ok(Self {
             tray,
             settings_requested,
+            resync_requested,
             _paused: paused,
             status_item,
         })
     }
     
-    pub fn update_status(&self, device_name: Option<&str>) {
-        let status_text = if let Some(name) = device_name {
-            format!("AW Clippy - Connected to {}", name)
+    pub fn update_status(&self, network_name: &str, device_name: Option<&str>) {
+        let (status_text, tooltip) = if let Some(name) = device_name {
+            (
+                format!("🟢 Synced with {} ({})", name, network_name),
+                format!("AW Clippy: Synchronized with {} ({})", name, network_name),
+            )
         } else {
-            "AW Clippy - Searching for Android...".to_string()
+            (
+                format!("🟠 Waiting for phone... ({})", network_name),
+                format!("AW Clippy: Connected to {}, waiting for phone...", network_name),
+            )
         };
         
         self.status_item.set_text(status_text);
-        
-        // Update tooltip as well
-        let tooltip = if let Some(name) = device_name {
-            format!("AW Clippy - Connected to {}", name)
-        } else {
-            "AW Clippy - Searching for Android device...".to_string()
-        };
-        
         let _ = self.tray.set_tooltip(Some(tooltip));
     }
+}
+
+pub fn show_startup_notification(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::UI::Shell::*;
+    use windows::Win32::UI::WindowsAndMessaging::{LoadIconW, IDI_INFORMATION};
+
+    let mut nid = NOTIFYICONDATAW::default();
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = 8888;
+    nid.uFlags = NOTIFY_ICON_DATA_FLAGS(NIF_INFO.0 | NIF_ICON.0 | NIF_TIP.0);
+    nid.hIcon = unsafe { LoadIconW(None, IDI_INFORMATION).unwrap_or_default() };
+
+    let title: Vec<u16> = "AWClippy".encode_utf16().chain(Some(0)).collect();
+    let title_len = title.len().min(nid.szInfoTitle.len());
+    nid.szInfoTitle[..title_len].copy_from_slice(&title[..title_len]);
+
+    let msg: Vec<u16> = "App is running in the system tray.".encode_utf16().chain(Some(0)).collect();
+    let msg_len = msg.len().min(nid.szInfo.len());
+    nid.szInfo[..msg_len].copy_from_slice(&msg[..msg_len]);
+
+    let tip: Vec<u16> = "AWClippy".encode_utf16().chain(Some(0)).collect();
+    let tip_len = tip.len().min(nid.szTip.len());
+    nid.szTip[..tip_len].copy_from_slice(&tip[..tip_len]);
+
+    nid.dwInfoFlags = NIIF_INFO;
+
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+    }
+
+    // Automatically remove after 5 seconds so no lingering ghost icon remains
+    // Pass HWND as isize primitive because HWND (*mut c_void) does not implement Send
+    let hwnd_raw = hwnd.0 as isize;
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        let mut del_nid = NOTIFYICONDATAW::default();
+        del_nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        del_nid.hWnd = windows::Win32::Foundation::HWND(hwnd_raw as _);
+        del_nid.uID = 8888;
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_DELETE, &del_nid);
+        }
+    });
 }
 
 fn create_simple_icon() -> Result<Icon, Box<dyn std::error::Error>> {

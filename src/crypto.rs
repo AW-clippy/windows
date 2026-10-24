@@ -15,14 +15,15 @@ impl ClipboardCrypto {
         Self { cipher }
     }
 
-    pub fn encrypt(&self, plaintext: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    pub fn encrypt(&self, plaintext: &str) -> Result<Vec<u8>, String> {
         let mut nonce_bytes = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         // Prepend 8-byte millisecond timestamp to plaintext for replay protection
         let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("System time error: {}", e))?
             .as_millis() as u64;
 
         let mut data_to_encrypt = now_ms.to_be_bytes().to_vec();
@@ -39,7 +40,7 @@ impl ClipboardCrypto {
         Ok(result)
     }
 
-    pub fn decrypt(&self, data: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn decrypt(&self, data: &[u8]) -> Result<String, String> {
         if data.len() < 12 {
             return Err("Data too short".into());
         }
@@ -59,7 +60,8 @@ impl ClipboardCrypto {
         let (ts_bytes, text_bytes) = decrypted_bytes.split_at(8);
         let packet_time_ms = u64::from_be_bytes(ts_bytes.try_into().unwrap());
         let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("System time error: {}", e))?
             .as_millis() as u64;
 
         let diff = if now_ms > packet_time_ms {
@@ -69,9 +71,9 @@ impl ClipboardCrypto {
         };
 
         if diff > 60_000 {
-            return Err(format!("Replay attack or clock skew detected: packet diff is {}ms (limit 60000ms)", diff).into());
+            return Err(format!("Replay attack or clock skew detected: packet diff is {}ms (limit 60000ms)", diff));
         }
 
-        Ok(String::from_utf8(text_bytes.to_vec())?)
+        String::from_utf8(text_bytes.to_vec()).map_err(|e| format!("UTF-8 decode error: {}", e))
     }
 }

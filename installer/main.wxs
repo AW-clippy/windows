@@ -1,95 +1,100 @@
-﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <Package Name="AW Clippy" Language="1033" Version="0.1.0" Manufacturer="AW Clippy Project" UpgradeCode="12345678-1234-1234-1234-123456789012" InstallerVersion="200"><SummaryInformation Description="Seamlessly sync clipboard between Windows and Android" />
-
-    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." AllowSameVersionUpgrades="yes" />
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  
+  <Package Name="AWClippy"
+           Manufacturer="AW Clippy Team"
+           Version="$(var.Version)"
+           UpgradeCode="C451878E-D135-4B82-9694-82D5C397072E"
+           Scope="perMachine">
+    
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed."
+                  Schedule="afterInstallInitialize"
+                  AllowSameVersionUpgrades="yes" />
 
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- Define the installation directory -->
-    
+    <Icon Id="AppIcon.ico" SourceFile="..\icons\app_icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/AW-clippy" />
 
-    <!-- Property to control desktop shortcut (checked by default) -->
-    <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
+    <!-- Terminate any running instance before install/upgrade/uninstall -->
+    <util:CloseApplication Id="CloseAWClippy"
+                           Target="awclippy-windows.exe"
+                           CloseMessage="yes"
+                           ElevatedCloseMessage="yes"
+                           RebootPrompt="no"
+                           TerminateProcess="1" />
 
-    <!-- Define features to install - all in one simple feature -->
-    <Feature Id="Complete" Level="1" Title="AW Clippy" Description="Complete installation" Display="expand" ConfigurableDirectory="INSTALLDIR">
-      <ComponentRef Id="MainExecutable" />
-      <ComponentRef Id="EnvFile" />
-      <ComponentRef Id="IconFiles" />
-      <ComponentRef Id="IconsComponent" />
-      <ComponentRef Id="ProgramMenuShortcutComponent" />
-      <ComponentRef Id="DesktopShortcutComponent" />
-    </Feature>
-
-    <!-- Icon for Add/Remove Programs -->
-    <Icon Id="AWClippyIcon.exe" SourceFile="../target/release/awclippy-windows.exe" />
-    <Property Id="ARPPRODUCTICON" Value="AWClippyIcon.exe" />
-    
-    <!-- Add/Remove Programs entries -->
-    <Property Id="ARPHELPLINK" Value="https://github.com/AW-clippy/windows" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/AW-clippy/windows" />
-    <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
-
-    <!-- UI - Minimal simple installation -->
-    <ui:WixUI Id="WixUI_Minimal" />
-    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
-    
-    <!-- Property for desktop shortcut (checked by default) -->
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
-    
-    <!-- Custom actions to stop the app before uninstall -->
-    <CustomAction Id="StopAWClippy" Directory="INSTALLDIR" ExeCommand="cmd.exe /c taskkill /F /IM awclippy-windows.exe 2&gt;nul" Execute="deferred" Return="ignore" Impersonate="yes" />
+    <!-- Forceful fallback: taskkill executed before Windows Installer checks if files are in use -->
+    <CustomAction Id="KillAWClippy"
+                  Directory="TARGETDIR"
+                  ExeCommand="&quot;[System64Folder]taskkill.exe&quot; /F /IM awclippy-windows.exe /T"
+                  Execute="immediate"
+                  Return="ignore" />
 
     <InstallExecuteSequence>
-      <Custom Action="StopAWClippy" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
+      <Custom Action="KillAWClippy" Before="InstallValidate" />
     </InstallExecuteSequence>
-  
-      <StandardDirectory Id="ProgramFilesFolder">
-        <Directory Id="INSTALLDIR" Name="AWClippy">
-          <Component Id="MainExecutable">
-            <File Id="AWClippyEXE" Name="awclippy-windows.exe" Source="../target/release/awclippy-windows.exe" KeyPath="yes" />
-            
-            <!-- Create Start Menu shortcut -->
-            <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="AW Clippy" WorkingDirectory="INSTALLDIR" Icon="AWClippyIcon.exe" IconIndex="0" Description="Cross-Platform Clipboard Sync" Advertise="yes" />
-            
-            <!-- Auto-start with Windows -->
-            <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="AWClippy" Value="&quot;[INSTALLDIR]awclippy-windows.exe&quot;" Type="string" />
-          </Component>
 
-          <Component Id="EnvFile">
-            <File Id="EnvExample" Name=".env.example" Source="../../.env.example" KeyPath="yes" />
-          </Component>
+    <InstallUISequence>
+      <Custom Action="KillAWClippy" Before="ExecuteAction" />
+    </InstallUISequence>
 
-          <Component Id="IconFiles">
-            <File Id="Icon32" Name="icon_32x32.png" Source="../icons/icon_32x32.png" KeyPath="yes" />
-          </Component>
-
-          <Directory Id="IconsFolder" Name="icons">
-            <Component Id="IconsComponent" Guid="A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D">
-              <CreateFolder />
-              <RegistryValue Root="HKCU" Key="Software\AWClippy" Name="IconsFolder" Type="integer" Value="1" KeyPath="yes" />
-            </Component>
-          </Directory>
-        </Directory>
-      </StandardDirectory>
-
-      <!-- Start Menu folder -->
-      <StandardDirectory Id="ProgramMenuFolder">
-        <Directory Id="ApplicationProgramsFolder" Name="AW Clippy">
-          <Component Id="ProgramMenuShortcutComponent">
-            <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
-            <RegistryValue Root="HKCU" Key="Software\AWClippy" Name="installed" Type="integer" Value="1" KeyPath="yes" />
-          </Component>
-        </Directory>
-      </StandardDirectory>
-
-      <!-- Desktop shortcut (optional) -->
-      <StandardDirectory Id="DesktopFolder">
-        <Component Id="DesktopShortcutComponent" Condition="INSTALLDESKTOPSHORTCUT">
-          <Shortcut Id="DesktopShortcut" Name="AW Clippy" Description="Cross-Platform Clipboard Sync" Target="[INSTALLDIR]awclippy-windows.exe" WorkingDirectory="INSTALLDIR" Icon="AWClippyIcon.exe" IconIndex="0" />
-          <RemoveFolder Id="DesktopFolder" On="uninstall" />
-          <RegistryValue Root="HKCU" Key="Software\AWClippy" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="AWClippy">
+        <Component Id="MainExecutable" Guid="3F875152-A62E-4D56-8A39-FA459CD99120" Bitness="always64">
+          <File Id="awclippy_windows_exe"
+                Source="..\target\release\awclippy-windows.exe"
+                KeyPath="yes" />
         </Component>
-      </StandardDirectory>
-    </Package>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="AWClippy">
+        <Component Id="ApplicationShortcuts" Guid="736DF96E-5C13-4B94-8833-28D8A7499D54">
+          <!-- Launch shortcut -->
+          <Shortcut Id="ApplicationStartMenuShortcut"
+                    Name="AWClippy"
+                    Description="AWClippy Universal Clipboard Sync"
+                    Target="[!awclippy_windows_exe]"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AppIcon.ico" />
+
+          <!-- Uninstall shortcut in Start Menu -->
+          <Shortcut Id="UninstallProductShortcut"
+                    Name="Uninstall AWClippy"
+                    Description="Uninstalls AWClippy from this PC"
+                    Target="[System64Folder]msiexec.exe"
+                    Arguments="/x [ProductCode]"
+                    Icon="AppIcon.ico" />
+
+          <RemoveFolder Id="CleanUpShortCut" Directory="ApplicationProgramsFolder" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\AWClippy" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Auto-start with Windows via Registry -->
+    <StandardDirectory Id="TARGETDIR">
+      <Component Id="AutoStartComponent" Guid="A9203C11-C581-4C10-9140-54D81E9A680C">
+        <RegistryValue Root="HKCU"
+                       Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                       Name="AWClippy"
+                       Type="string"
+                       Value="&quot;[#awclippy_windows_exe]&quot;"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="AWClippy" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="ApplicationShortcuts" />
+      <ComponentRef Id="AutoStartComponent" />
+    </Feature>
+
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+  </Package>
 </Wix>

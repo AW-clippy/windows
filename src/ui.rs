@@ -230,9 +230,21 @@ impl SettingsWindow {
         false
     }
 
-    pub fn show(&self) {
+    pub fn show(&self, network_name: &str, device_name: Option<&str>) {
+        let status_str = if let Some(phone) = device_name {
+            format!("Connected to {}, but synchronized with {}", network_name, phone)
+        } else {
+            format!("Connected to {} (Not synchronized)", network_name)
+        };
+        let status_wide: Vec<u16> = status_str.encode_utf16().chain(Some(0)).collect();
+
         if self.is_open.swap(true, Ordering::SeqCst) {
             unsafe {
+                if let Ok(ctrl) = GetDlgItem(self.hwnd, IDC_STATUS_TEXT) {
+                    if !ctrl.is_invalid() {
+                        let _ = SetWindowTextW(ctrl, PCWSTR(status_wide.as_ptr()));
+                    }
+                }
                 let _ = ShowWindow(self.hwnd, SW_RESTORE);
                 let _ = SetForegroundWindow(self.hwnd);
             }
@@ -241,13 +253,13 @@ impl SettingsWindow {
 
         unsafe {
             SetWindowTheme(self.hwnd, w!("Explorer"), PCWSTR::null()).ok();
-            self.create_controls();
+            self.create_controls(&status_str);
             let _ = ShowWindow(self.hwnd, SW_SHOW);
             let _ = UpdateWindow(self.hwnd);
         }
     }
 
-    unsafe fn create_controls(&self) {
+    unsafe fn create_controls(&self, initial_status: &str) {
         let h_instance = GetModuleHandleW(None).unwrap();
         let _is_dark = Self::is_dark_mode();
         
@@ -312,12 +324,13 @@ impl SettingsWindow {
         ).unwrap();
         SendMessageW(status_label, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
 
+        let status_wide: Vec<u16> = initial_status.encode_utf16().chain(Some(0)).collect();
         let status_value = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("STATIC"),
-            w!("Connected"),
+            PCWSTR(status_wide.as_ptr()),
             WS_VISIBLE | WS_CHILD | WINDOW_STYLE(SS_LEFT),
-            130, group_y + 25, 300, 20,
+            130, group_y + 25, 360, 20,
             self.hwnd, HMENU(IDC_STATUS_TEXT as _), h_instance, None,
         ).unwrap();
         SendMessageW(status_value, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));

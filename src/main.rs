@@ -15,16 +15,24 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 fn load_config() -> (Vec<u8>, u16, u16) {
-    // Try to load .env file
+    // 1. Try to load runtime .env if located next to executable
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let env_in_exe_dir = exe_dir.join(".env");
+            if env_in_exe_dir.exists() {
+                dotenvy::from_path(&env_in_exe_dir).ok();
+            }
+        }
+    }
+    // 2. Try current working directory .env
     dotenvy::dotenv().ok();
     
-    // Get shared secret from environment or use default
+    // Get shared secret from environment or fallback to compile-time baked secret from .env
+    let default_compiled_secret = option_env!("COMPILED_AWCLIPPY_SHARED_SECRET")
+        .unwrap_or("CHANGE_THIS_TO_YOUR_SECRET_KEY!!");
+
     let secret_str = std::env::var("AWCLIPPY_SHARED_SECRET")
-        .unwrap_or_else(|_| {
-            log::debug_error!("Warning: AWCLIPPY_SHARED_SECRET not set in .env file");
-            log::debug_error!("Using default key - CHANGE THIS FOR SECURITY!");
-            "CHANGE_THIS_TO_YOUR_SECRET_KEY!!".to_string()
-        });
+        .unwrap_or_else(|_| default_compiled_secret.to_string());
     
     // Derive uniform 32-byte AES key using SHA-256
     use sha2::{Sha256, Digest};
@@ -32,33 +40,66 @@ fn load_config() -> (Vec<u8>, u16, u16) {
     hasher.update(secret_str.as_bytes());
     let secret = hasher.finalize().to_vec();
     
+    let default_discovery_port: u16 = option_env!("COMPILED_AWCLIPPY_DISCOVERY_PORT")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(48899);
+
     let discovery_port = std::env::var("AWCLIPPY_DISCOVERY_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(48899);
+        .unwrap_or(default_discovery_port);
     
+    let default_sync_port: u16 = option_env!("COMPILED_AWCLIPPY_SYNC_PORT")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(48900);
+
     let sync_port = std::env::var("AWCLIPPY_SYNC_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(48900);
+        .unwrap_or(default_sync_port);
     
     (secret, discovery_port, sync_port)
 }
 
 #[derive(Clone)]
 pub struct AppState {
-    last_clipboard_hash: Arc<Mutex<Option<u64>>>,
-    crypto: crypto::ClipboardCrypto,
-    sync_port: u16,
+    pub last_clipboard_hash: Arc<Mutex<Option<u64>>>,
+    pub crypto: crypto::ClipboardCrypto,
+    pub sync_port: u16,
     #[allow(dead_code)]
-    discovery_port: u16,
+    pub discovery_port: u16,
     pub paused: Arc<std::sync::atomic::AtomicBool>,
     pub android_device_name: Arc<Mutex<Option<String>>>,
     pub android_connected: Arc<std::sync::atomic::AtomicBool>,
+    pub network_name: Arc<Mutex<String>>,
+    pub last_seen: Arc<Mutex<Option<std::time::Instant>>>,
+    pub status_dirty: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--exit" || a == "--kill" || a == "--stop") {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "awclippy-windows.exe", "/T"])
+            .output();
+        return Ok(());
+    }
+
+    // Ensure only one instance of AWClippy runs at a time
+    use windows::Win32::System::Threading::CreateMutexW;
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::core::w;
+
+    let _single_instance = unsafe {
+        let m = CreateMutexW(None, true, w!("Global\\AWClippy_SingleInstance_Mutex"));
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            log::debug_log!("AWClippy is already running in background.");
+            return Ok(());
+        }
+        m
+    };
+
     log::debug_log!("AW Clippy Windows Client Starting...");
     
     // Load configuration
@@ -68,6 +109,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::debug_log!("  Discovery Port: {}", discovery_port);
     log::debug_log!("  Sync Port: {}", sync_port);
     
+    let initial_network = network::get_network_name();
+    log::debug_log!("Initial Network Name: {}", initial_network);
+    
     let state = AppState {
         last_clipboard_hash: Arc::new(Mutex::new(None)),
         crypto: crypto::ClipboardCrypto::new(&shared_secret.try_into().unwrap()),
@@ -76,6 +120,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         android_device_name: Arc::new(Mutex::new(None)),
         android_connected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        network_name: Arc::new(Mutex::new(initial_network.clone())),
+        last_seen: Arc::new(Mutex::new(None)),
+        status_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Start network listener
@@ -98,10 +145,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::debug_error!("mDNS browser error: {}", _e);
     }
 
+    // Start network and heartbeat monitor
+    network::start_heartbeat_monitor(state.clone()).await;
+
     // Initialize system tray with comprehensive menu
     let tray_handle = match tray::TrayMenu::new(state.paused.clone()) {
         Ok(tray) => {
             log::debug_log!("✅ System tray initialized successfully");
+            tray.update_status(&initial_network, None);
             Some(tray)
         }
         Err(_e) => {
@@ -111,8 +162,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Clone the settings_requested flag for the message loop
+    // Clone flags for the message loop
     let settings_requested = tray_handle.as_ref().map(|t| Arc::clone(&t.settings_requested));
+    let resync_requested = tray_handle.as_ref().map(|t| Arc::clone(&t.resync_requested));
     
     // Create settings window
     let settings_window = match ui::SettingsWindow::new() {
@@ -125,7 +177,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start clipboard monitoring on main thread (Windows requirement)
     let clipboard_state = state.clone();
-    clipboard::monitor_clipboard(clipboard_state).await?;
+    clipboard::monitor_clipboard(clipboard_state).await.map_err(|e| e.to_string())?;
+
+    // Show system notification indicating app is active in system tray
+    if let Some(hwnd) = clipboard::get_hwnd() {
+        tray::show_startup_notification(hwnd);
+    }
 
     // Message loop for Windows - use PeekMessageW for non-blocking message processing
     unsafe {
@@ -136,31 +193,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Check if settings window was requested
             if let (Some(ref flag), Some(ref settings)) = (&settings_requested, &settings_window) {
                 if flag.swap(false, Ordering::SeqCst) {
-                    settings.show();
+                    let net = state.network_name.try_lock().map(|l| l.clone()).unwrap_or_else(|_| "Local Network".to_string());
+                    let phone = state.android_device_name.try_lock().ok().and_then(|l| l.clone());
+                    settings.show(&net, phone.as_deref());
                 }
             }
             
-            // Update tray status periodically (every 2 seconds)
-            if tray_handle.is_some() && last_status_update.elapsed() > std::time::Duration::from_secs(2) {
-                // Try to get the device name without blocking
-                if let Ok(device_name_lock) = state.android_device_name.try_lock() {
+            // Check if re-sync was requested from tray menu
+            if let Some(ref resync_flag) = resync_requested {
+                if resync_flag.swap(false, Ordering::SeqCst) {
+                    let resync_state = state.clone();
+                    tokio::spawn(async move {
+                        network::trigger_resync(resync_state).await;
+                    });
+                }
+            }
+            
+            // Check for tray icon events (mouse hover/click) to refresh status immediately
+            if let Ok(_event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+                if let (Ok(device_name_lock), Ok(net_name_lock)) = (state.android_device_name.try_lock(), state.network_name.try_lock()) {
                     if let Some(ref tray) = tray_handle {
-                        tray.update_status(device_name_lock.as_deref());
+                        tray.update_status(&net_name_lock, device_name_lock.as_deref());
+                    }
+                }
+            }
+
+            // Update tray status if status became dirty OR periodically (every 300ms)
+            let dirty = state.status_dirty.swap(false, Ordering::SeqCst);
+            if tray_handle.is_some() && (dirty || last_status_update.elapsed() > std::time::Duration::from_millis(300)) {
+                if let (Ok(device_name_lock), Ok(net_name_lock)) = (state.android_device_name.try_lock(), state.network_name.try_lock()) {
+                    if let Some(ref tray) = tray_handle {
+                        tray.update_status(&net_name_lock, device_name_lock.as_deref());
                     }
                 }
                 last_status_update = std::time::Instant::now();
             }
             
-            // Use PeekMessageW for non-blocking message processing
-            if PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).into() {
+            // Process all pending window messages immediately
+            let mut had_messages = false;
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).into() {
+                had_messages = true;
                 if msg.message == WM_QUIT {
                     break;
                 }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
-            } else {
-                // Brief sleep to avoid busy-waiting, but check status periodically
-                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            if msg.message == WM_QUIT {
+                break;
+            }
+            if !had_messages {
+                // Short yield when idle
+                std::thread::sleep(std::time::Duration::from_millis(15));
             }
         }
     }
