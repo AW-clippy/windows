@@ -6,6 +6,7 @@ mod network;
 mod tray;
 mod ui;
 mod log;
+mod win32_ffi;
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
